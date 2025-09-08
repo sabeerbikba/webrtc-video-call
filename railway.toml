@@ -1,0 +1,8 @@
+[project]
+name = "webrtc-video-call"
+
+[env]
+
+[service]
+name = "web"
+start = "npm start"
