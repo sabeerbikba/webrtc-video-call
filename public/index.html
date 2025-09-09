@@ -49,14 +49,14 @@
           id="mainVideo"
           autoplay
           playsinline
-          class="w-full h-full object-cover"
+          class="w-full h-full object-contain bg-black"
         ></video>
         <video
           id="pipVideo"
           autoplay
           playsinline
           muted
-          class="absolute bottom-2 right-2 w-32 h-32 border-2 border-white rounded-lg shadow-lg cursor-pointer"
+          class="absolute bottom-2 right-2 w-28 h-28 sm:w-40 sm:h-40 border-2 border-white rounded-lg shadow-lg cursor-pointer"
         ></video>
       </div>
 
@@ -142,10 +142,9 @@
         room = Math.random().toString(36).slice(2, 8);
         const link = `${location.origin}${location.pathname}?room=${room}&auto=1`;
         shareInfo.innerHTML = `
-    Room created: <b>${room}</b><br>
-    Share this link: <a href="${link}" class="text-green-400 underline">${link}</a>
-  `;
-        // Use Web Share API if available
+          Room created: <b>${room}</b><br>
+          Share this link: <a href="${link}" class="text-green-400 underline">${link}</a>
+        `;
         if (navigator.share) {
           navigator
             .share({
@@ -161,7 +160,6 @@
       btnJoin.onclick = () => {
         room = roomInput.value.trim();
         if (!room) return alert("Enter room ID");
-        // Redirect with query param so URL shows room ID
         window.location.href = `${location.pathname}?room=${room}&auto=1`;
       };
 
@@ -169,7 +167,7 @@
       btnAccept.onclick = () => {
         incomingPopup.classList.add("hidden");
         ws.send(JSON.stringify({ type: "accept", room }));
-        startPeer(false); // FIX: callee preps its peer connection immediately
+        startPeer(false);
       };
       btnReject.onclick = () => {
         incomingPopup.classList.add("hidden");
@@ -177,14 +175,14 @@
         cleanup();
       };
 
-      // Toggle self/remote video on tap
+      // Swap videos on tap
       pipVideo.onclick = () => {
         const tempSrc = mainVideo.srcObject;
         mainVideo.srcObject = pipVideo.srcObject;
         pipVideo.srcObject = tempSrc;
       };
 
-      // Call flow init
+      // Start call flow
       function startCallFlow(r) {
         room = r;
         preCall.classList.add("hidden");
@@ -195,8 +193,7 @@
         ws.onopen = () => ws.send(JSON.stringify({ type: "join", room }));
         ws.onmessage = async ({ data }) => {
           const msg = JSON.parse(data);
-          if (msg.type === "role")
-            setStatus(`Role: ${msg.role} | Waiting for peer…`);
+          if (msg.type === "role") setStatus(`Role: ${msg.role}`);
           if (msg.type === "incoming") incomingPopup.classList.remove("hidden");
           if (msg.type === "peer-joined") setStatus("Peer joined");
           if (msg.type === "accepted") {
@@ -209,7 +206,7 @@
           }
           if (msg.type === "offer") {
             setStatus("Offer received…");
-            if (!pc) startPeer(false); // ensure callee peer exists
+            if (!pc) startPeer(false);
             await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -250,18 +247,22 @@
           audio: true,
         });
         pipVideo.srcObject = localStream;
+
         localStream
           .getTracks()
           .forEach((track) => pc.addTrack(track, localStream));
+
         pc.ontrack = (e) => {
           remoteStream = e.streams[0];
           mainVideo.srcObject = remoteStream;
         };
+
         pc.onicecandidate = (e) =>
           e.candidate &&
           ws.send(
             JSON.stringify({ type: "candidate", candidate: e.candidate, room })
           );
+
         if (isInitiator) {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -276,24 +277,36 @@
         t.enabled = !t.enabled;
         btnMute.textContent = t.enabled ? "Mute" : "Unmute";
       };
+
       btnVideo.onclick = () => {
         if (!localStream) return;
         const t = localStream.getVideoTracks()[0];
         t.enabled = !t.enabled;
         btnVideo.textContent = t.enabled ? "Video Off" : "Video On";
       };
+
+      // FIX: switch camera with replaceTrack()
       btnSwitch.onclick = async () => {
         currentCam = currentCam === "user" ? "environment" : "user";
-        localStream.getTracks().forEach((t) => t.stop());
-        localStream = await navigator.mediaDevices.getUserMedia({
+
+        const newStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: currentCam },
           audio: true,
         });
+
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        const sender = pc
+          .getSenders()
+          .find((s) => s.track && s.track.kind === "video");
+        if (sender) {
+          await sender.replaceTrack(newVideoTrack);
+        }
+
+        localStream.getTracks().forEach((t) => t.stop());
+        localStream = newStream;
         pipVideo.srcObject = localStream;
-        localStream
-          .getTracks()
-          .forEach((track) => pc.addTrack(track, localStream));
       };
+
       btnEnd.onclick = () => {
         ws.send(JSON.stringify({ type: "end", room }));
         endAndGoHome();
@@ -317,6 +330,16 @@
         cleanup();
         window.location.href = "/";
       }
+
+      // Hide switch button if device only has one camera
+      async function checkCameraCount() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === "videoinput");
+        if (videoInputs.length < 2) {
+          btnSwitch.classList.add("hidden");
+        }
+      }
+      checkCameraCount();
     </script>
   </body>
 </html>

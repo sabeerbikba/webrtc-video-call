@@ -23,9 +23,7 @@ wss.on("connection", (ws) => {
             ws.send(JSON.stringify({ type: "role", role: "caller" }));
          } else if (peers.length === 2) {
             ws.send(JSON.stringify({ type: "role", role: "callee" }));
-            // notify caller that peer joined
             peers[0].send(JSON.stringify({ type: "peer-joined" }));
-            // notify callee there's an incoming call
             ws.send(JSON.stringify({ type: "incoming" }));
          }
       }
@@ -34,7 +32,7 @@ wss.on("connection", (ws) => {
          const peers = rooms[data.room] || [];
          const caller = peers[0];
          if (caller) {
-            caller.send(JSON.stringify({ type: "accepted" })); // 👈 triggers offer creation
+            caller.send(JSON.stringify({ type: "accepted" }));
          }
       }
 
@@ -66,5 +64,4 @@ wss.on("connection", (ws) => {
 });
 
 const PORT = 8080;
-app.use(express.static("."));
 server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
