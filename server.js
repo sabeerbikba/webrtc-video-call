@@ -3,6 +3,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 
 const app = express();
+app.use(express.static("public"));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
