@@ -169,6 +169,7 @@
       btnAccept.onclick = () => {
         incomingPopup.classList.add("hidden");
         ws.send(JSON.stringify({ type: "accept", room }));
+        startPeer(false); // FIX: callee preps its peer connection immediately
       };
       btnReject.onclick = () => {
         incomingPopup.classList.add("hidden");
@@ -208,7 +209,7 @@
           }
           if (msg.type === "offer") {
             setStatus("Offer received…");
-            startPeer(false);
+            if (!pc) startPeer(false); // ensure callee peer exists
             await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -220,10 +221,11 @@
               new RTCSessionDescription(msg.answer)
             );
           }
-          if (msg.type === "candidate")
+          if (msg.type === "candidate") {
             try {
               await pc.addIceCandidate(msg.candidate);
             } catch {}
+          }
           if (msg.type === "end") {
             setStatus("Call ended");
             endAndGoHome();
