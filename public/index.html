@@ -1,444 +1,303 @@
-<!-- <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WebRTC Tailwind Call</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-  </head>
-  <body class="bg-gray-100 flex flex-col items-center min-h-screen p-4">
-    <h1 class="text-2xl font-bold mb-2">WebRTC Video Call</h1>
-    <p class="mb-4">Share this link with a friend:</p>
-    <div id="link" class="text-blue-600 font-medium mb-4"></div>
-
-    <div class="flex gap-4 mb-4" id="videos">
-      <video
-        id="local"
-        autoplay
-        muted
-        class="w-80 h-60 bg-black rounded-lg shadow-md"
-      ></video>
-      <video
-        id="remote"
-        autoplay
-        class="w-80 h-60 bg-black rounded-lg shadow-md"
-      ></video>
-    </div>
-
-    <div class="flex gap-2 mb-4" id="controls">
-      <button
-        id="btnToggleAudio"
-        class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Mute
-      </button>
-      <button
-        id="btnToggleVideo"
-        class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Disable Video
-      </button>
-      <button
-        id="btnEnd"
-        class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-      >
-        End Call
-      </button>
-    </div>
-
-    <div
-      id="incoming"
-      class="fixed top-1/4 left-1/2 transform -translate-x-1/2 bg-white p-6 rounded shadow-lg hidden"
-    >
-      <h2 class="text-lg font-bold mb-2">Incoming Call</h2>
-      <p class="mb-4">Someone is calling you. Accept to start.</p>
-      <div class="flex gap-2">
-        <button
-          id="acceptBtn"
-          class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-        >
-          Accept
-        </button>
-        <button
-          id="declineBtn"
-          class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-        >
-          Decline
-        </button>
-      </div>
-    </div>
-
-    <script type="module">
-      const urlParams = new URLSearchParams(location.search);
-      let room = urlParams.get("room");
-      if (!room) {
-        room = Math.random().toString(36).slice(2, 9);
-        history.replaceState(null, "", "?room=" + room);
-      }
-      document.getElementById("link").innerText = location.href;
-
-      const localVideo = document.getElementById("local");
-      const remoteVideo = document.getElementById("remote");
-      const btnToggleAudio = document.getElementById("btnToggleAudio");
-      const btnToggleVideo = document.getElementById("btnToggleVideo");
-      const btnEnd = document.getElementById("btnEnd");
-      const incomingBox = document.getElementById("incoming");
-      const acceptBtn = document.getElementById("acceptBtn");
-      const declineBtn = document.getElementById("declineBtn");
-
-      const pcConfig = {
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      };
-      let pc, localStream, ws, role;
-
-      function createPeerConnection() {
-        pc = new RTCPeerConnection(pcConfig);
-        localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-        pc.ontrack = (e) => {
-          remoteVideo.srcObject = e.streams[0];
-        };
-        pc.onicecandidate = (e) => {
-          if (e.candidate)
-            ws.send(
-              JSON.stringify({ type: "ice", room, payload: e.candidate })
-            );
-        };
-        pc.onconnectionstatechange = () => {
-          if (["disconnected", "failed", "closed"].includes(pc.connectionState))
-            endCallUI();
-        };
-      }
-
-      async function startLocalMedia() {
-        if (localStream) return;
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true,
-        });
-        localVideo.srcObject = localStream;
-      }
-
-      async function init() {
-        ws = new WebSocket(
-          (location.protocol === "https:" ? "wss" : "ws") +
-            "://" +
-            location.host
-        );
-        ws.onopen = () => ws.send(JSON.stringify({ type: "join", room }));
-        ws.onmessage = async (ev) => {
-          let msg = JSON.parse(ev.data);
-          if (msg.type === "joined") {
-            role = msg.role;
-            console.log("joined as", role);
-          }
-          if (msg.type === "peer-joined") {
-            console.log("peer joined — waiting for callee to accept");
-          }
-          if (msg.type === "incoming") {
-            incomingBox.classList.remove("hidden");
-          }
-          if (msg.type === "callee-accepted") {
-            await startLocalMedia();
-            createPeerConnection();
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: "offer", room, payload: offer }));
-          }
-          if (msg.type === "offer") {
-            await startLocalMedia();
-            createPeerConnection();
-            await pc.setRemoteDescription(
-              new RTCSessionDescription(msg.payload)
-            );
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: "answer", room, payload: answer }));
-          }
-          if (msg.type === "answer") {
-            await pc.setRemoteDescription(
-              new RTCSessionDescription(msg.payload)
-            );
-          }
-          if (msg.type === "ice") {
-            try {
-              await pc.addIceCandidate(msg.payload);
-            } catch {}
-          }
-          if (["end", "peer-left"].includes(msg.type)) endCallUI();
-          if (msg.type === "full") alert("Room full (max 2)");
-        };
-        ws.onclose = () => console.log("ws closed");
-      }
-
-      acceptBtn.onclick = () => {
-        incomingBox.classList.add("hidden");
-        ws.send(JSON.stringify({ type: "accept", room }));
-      };
-      declineBtn.onclick = () => {
-        incomingBox.classList.add("hidden");
-        ws.send(JSON.stringify({ type: "end", room }));
-      };
-      btnToggleAudio.onclick = () => {
-        const track = localStream?.getAudioTracks()[0];
-        if (track) {
-          track.enabled = !track.enabled;
-          btnToggleAudio.innerText = track.enabled ? "Mute" : "Unmute";
-        }
-      };
-      btnToggleVideo.onclick = () => {
-        const track = localStream?.getVideoTracks()[0];
-        if (track) {
-          track.enabled = !track.enabled;
-          btnToggleVideo.innerText = track.enabled
-            ? "Disable Video"
-            : "Enable Video";
-        }
-      };
-      btnEnd.onclick = () => {
-        ws.send(JSON.stringify({ type: "end", room }));
-        cleanup();
-      };
-
-      function endCallUI() {
-        cleanup();
-        alert("Call ended");
-      }
-      function cleanup() {
-        if (pc) {
-          try {
-            pc.close();
-          } catch {}
-          pc = null;
-        }
-        if (localStream) {
-          localStream.getTracks().forEach((t) => t.stop());
-          localStream = null;
-        }
-        localVideo.srcObject = null;
-        remoteVideo.srcObject = null;
-        try {
-          ws.close();
-        } catch {}
-      }
-
-      init();
-    </script>
-  </body>
-</html> -->
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <title>WhatsApp Style WebRTC Call</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WebRTC Call</title>
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
-  <body class="bg-gray-100 flex flex-col items-center min-h-screen p-4">
-    <h1 class="text-2xl font-bold mb-2">WebRTC Video Call</h1>
-    <p class="mb-4">Share this link with a friend:</p>
-    <div id="link" class="text-blue-600 font-medium mb-4"></div>
-
-    <div class="flex gap-4 mb-4" id="videos">
-      <video
-        id="local"
-        autoplay
-        muted
-        class="w-80 h-60 bg-black rounded-lg shadow-md"
-      ></video>
-      <video
-        id="remote"
-        autoplay
-        class="w-80 h-60 bg-black rounded-lg shadow-md"
-      ></video>
-    </div>
-
-    <div class="flex gap-2 mb-4" id="controls">
-      <button
-        id="btnToggleAudio"
-        class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Mute
-      </button>
-      <button
-        id="btnToggleVideo"
-        class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Disable Video
-      </button>
-      <button
-        id="btnEnd"
-        class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-      >
-        End Call
-      </button>
-    </div>
-
+  <body class="bg-gray-900 text-white flex flex-col h-screen">
+    <!-- Pre-call Screen -->
     <div
-      id="incoming"
-      class="fixed top-1/4 left-1/2 transform -translate-x-1/2 bg-white p-6 rounded shadow-lg hidden"
+      id="preCall"
+      class="flex flex-col flex-1 items-center justify-center space-y-6"
     >
-      <h2 class="text-lg font-bold mb-2">Incoming Call</h2>
-      <p class="mb-4">Someone is calling you. Accept to start.</p>
-      <div class="flex gap-2">
-        <button
-          id="acceptBtn"
-          class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-        >
-          Accept
+      <h1 class="text-2xl font-bold text-green-500">WhatsApp Video Call</h1>
+
+      <!-- Create Room -->
+      <button id="btnCreate" class="px-6 py-2 bg-green-600 rounded-lg">
+        Create Room
+      </button>
+
+      <!-- Join Room -->
+      <div class="flex space-x-2">
+        <input
+          id="roomInput"
+          type="text"
+          placeholder="Enter Room ID"
+          class="px-3 py-2 rounded-lg text-black"
+        />
+        <button id="btnJoin" class="px-4 py-2 bg-green-600 rounded-lg">
+          Join
         </button>
-        <button
-          id="declineBtn"
-          class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-        >
-          Decline
+      </div>
+
+      <!-- Share link -->
+      <p id="shareInfo" class="text-sm text-gray-400"></p>
+    </div>
+
+    <!-- Call Screen -->
+    <div id="callScreen" class="hidden flex flex-col flex-1">
+      <!-- Status Bar -->
+      <div id="status" class="p-2 bg-green-700 text-sm text-center">
+        Connecting…
+      </div>
+
+      <!-- Video Container -->
+      <div class="relative flex-1 bg-black overflow-hidden">
+        <video
+          id="mainVideo"
+          autoplay
+          playsinline
+          class="w-full h-full object-cover"
+        ></video>
+        <video
+          id="pipVideo"
+          autoplay
+          playsinline
+          muted
+          class="absolute bottom-2 right-2 w-32 h-32 border-2 border-white rounded-lg shadow-lg cursor-pointer"
+        ></video>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex justify-around bg-gray-800 p-3">
+        <button id="btnMute" class="px-4 py-2 bg-green-600 rounded-full">
+          Mute
+        </button>
+        <button id="btnVideo" class="px-4 py-2 bg-green-600 rounded-full">
+          Video Off
+        </button>
+        <button id="btnSwitch" class="px-4 py-2 bg-green-600 rounded-full">
+          Switch Cam
+        </button>
+        <button id="btnEnd" class="px-4 py-2 bg-red-600 rounded-full">
+          End
         </button>
       </div>
     </div>
 
-    <script type="module">
-      const urlParams = new URLSearchParams(location.search);
-      let room = urlParams.get("room");
-      if (!room) {
-        room = Math.random().toString(36).slice(2, 9);
-        history.replaceState(null, "", "?room=" + room);
-      }
-      document.getElementById("link").innerText = location.href;
+    <!-- Incoming Popup -->
+    <div
+      id="incoming"
+      class="hidden absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center"
+    >
+      <div class="bg-gray-800 p-6 rounded-lg text-center space-y-4">
+        <p class="text-lg font-semibold">Incoming Call</p>
+        <div class="space-x-4">
+          <button id="btnAccept" class="px-4 py-2 bg-green-600 rounded-lg">
+            Accept
+          </button>
+          <button id="btnReject" class="px-4 py-2 bg-red-600 rounded-lg">
+            Reject
+          </button>
+        </div>
+      </div>
+    </div>
 
-      const localVideo = document.getElementById("local");
-      const remoteVideo = document.getElementById("remote");
-      const btnToggleAudio = document.getElementById("btnToggleAudio");
-      const btnToggleVideo = document.getElementById("btnToggleVideo");
+    <script>
+      const preCall = document.getElementById("preCall");
+      const callScreen = document.getElementById("callScreen");
+      const shareInfo = document.getElementById("shareInfo");
+      const statusEl = document.getElementById("status");
+      const mainVideo = document.getElementById("mainVideo");
+      const pipVideo = document.getElementById("pipVideo");
+      const incomingPopup = document.getElementById("incoming");
+
+      // Buttons
+      const btnCreate = document.getElementById("btnCreate");
+      const btnJoin = document.getElementById("btnJoin");
+      const btnAccept = document.getElementById("btnAccept");
+      const btnReject = document.getElementById("btnReject");
+      const btnMute = document.getElementById("btnMute");
+      const btnVideo = document.getElementById("btnVideo");
+      const btnSwitch = document.getElementById("btnSwitch");
       const btnEnd = document.getElementById("btnEnd");
-      const incomingBox = document.getElementById("incoming");
-      const acceptBtn = document.getElementById("acceptBtn");
-      const declineBtn = document.getElementById("declineBtn");
+      const roomInput = document.getElementById("roomInput");
 
-      const pcConfig = {
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          {
-            urls: "turn:openrelay.metered.ca:443?transport=tcp",
-            username: "openrelayproject",
-            credential: "openrelayproject",
-          },
-        ],
+      let ws,
+        pc,
+        localStream,
+        remoteStream,
+        currentCam = "user",
+        room;
+
+      function setStatus(msg) {
+        statusEl.textContent = msg;
+      }
+
+      // Auto-detect ?room= in URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const autoRoom = urlParams.get("room");
+      const autoJoin = urlParams.get("auto");
+      if (autoRoom) {
+        roomInput.value = autoRoom;
+        if (autoJoin === "1") {
+          startCallFlow(autoRoom);
+        }
+      }
+
+      // Create room
+      btnCreate.onclick = () => {
+        room = Math.random().toString(36).slice(2, 8);
+        const link = `${location.origin}${location.pathname}?room=${room}&auto=1`;
+        shareInfo.innerHTML = `
+    Room created: <b>${room}</b><br>
+    Share this link: <a href="${link}" class="text-green-400 underline">${link}</a>
+  `;
+        // Use Web Share API if available
+        if (navigator.share) {
+          navigator
+            .share({
+              title: "Join my video call",
+              text: `Click to join room: ${room}`,
+              url: link,
+            })
+            .catch(() => {});
+        }
       };
 
-      let pc, localStream, ws, role;
+      // Join room
+      btnJoin.onclick = () => {
+        room = roomInput.value.trim();
+        if (!room) return alert("Enter room ID");
+        // Redirect with query param so URL shows room ID
+        window.location.href = `${location.pathname}?room=${room}&auto=1`;
+      };
 
-      function createPeerConnection() {
-        pc = new RTCPeerConnection(pcConfig);
-        localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-        pc.ontrack = (e) => {
-          remoteVideo.srcObject = e.streams[0];
-        };
-        pc.onicecandidate = (e) => {
-          if (e.candidate)
-            ws.send(
-              JSON.stringify({ type: "ice", room, payload: e.candidate })
-            );
-        };
-        pc.onconnectionstatechange = () => {
-          if (["disconnected", "failed", "closed"].includes(pc.connectionState))
-            endCallUI();
-        };
-      }
-
-      async function startLocalMedia() {
-        if (localStream) return;
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true,
-        });
-        localVideo.srcObject = localStream;
-      }
-
-      async function init() {
-        ws = new WebSocket(
-          (location.protocol === "https:" ? "wss" : "ws") +
-            "://" +
-            location.host
-        );
-        ws.onopen = () => ws.send(JSON.stringify({ type: "join", room }));
-        ws.onmessage = async (ev) => {
-          let msg = JSON.parse(ev.data);
-          if (msg.type === "joined") {
-            role = msg.role;
-            console.log("joined as", role);
-          }
-          if (msg.type === "peer-joined") {
-            console.log("peer joined — waiting for callee to accept");
-          }
-          if (msg.type === "incoming") {
-            incomingBox.classList.remove("hidden");
-          }
-          if (msg.type === "callee-accepted") {
-            await startLocalMedia();
-            createPeerConnection();
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: "offer", room, payload: offer }));
-          }
-          if (msg.type === "offer") {
-            await startLocalMedia();
-            createPeerConnection();
-            await pc.setRemoteDescription(
-              new RTCSessionDescription(msg.payload)
-            );
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: "answer", room, payload: answer }));
-          }
-          if (msg.type === "answer") {
-            await pc.setRemoteDescription(
-              new RTCSessionDescription(msg.payload)
-            );
-          }
-          if (msg.type === "ice") {
-            try {
-              await pc.addIceCandidate(msg.payload);
-            } catch {}
-          }
-          if (["end", "peer-left"].includes(msg.type)) endCallUI();
-          if (msg.type === "full") alert("Room full (max 2)");
-        };
-        ws.onclose = () => console.log("ws closed");
-      }
-
-      acceptBtn.onclick = () => {
-        incomingBox.classList.add("hidden");
+      // Incoming call popup
+      btnAccept.onclick = () => {
+        incomingPopup.classList.add("hidden");
         ws.send(JSON.stringify({ type: "accept", room }));
       };
-      declineBtn.onclick = () => {
-        incomingBox.classList.add("hidden");
-        ws.send(JSON.stringify({ type: "end", room }));
+      btnReject.onclick = () => {
+        incomingPopup.classList.add("hidden");
+        ws.send(JSON.stringify({ type: "reject", room }));
+        cleanup();
       };
-      btnToggleAudio.onclick = () => {
-        const track = localStream?.getAudioTracks()[0];
-        if (track) {
-          track.enabled = !track.enabled;
-          btnToggleAudio.innerText = track.enabled ? "Mute" : "Unmute";
-        }
+
+      // Toggle self/remote video on tap
+      pipVideo.onclick = () => {
+        const tempSrc = mainVideo.srcObject;
+        mainVideo.srcObject = pipVideo.srcObject;
+        pipVideo.srcObject = tempSrc;
       };
-      btnToggleVideo.onclick = () => {
-        const track = localStream?.getVideoTracks()[0];
-        if (track) {
-          track.enabled = !track.enabled;
-          btnToggleVideo.innerText = track.enabled
-            ? "Disable Video"
-            : "Enable Video";
+
+      // Call flow init
+      function startCallFlow(r) {
+        room = r;
+        preCall.classList.add("hidden");
+        callScreen.classList.remove("hidden");
+        ws = new WebSocket(
+          (location.protocol === "https:" ? "wss://" : "ws://") + location.host
+        );
+        ws.onopen = () => ws.send(JSON.stringify({ type: "join", room }));
+        ws.onmessage = async ({ data }) => {
+          const msg = JSON.parse(data);
+          if (msg.type === "role")
+            setStatus(`Role: ${msg.role} | Waiting for peer…`);
+          if (msg.type === "incoming") incomingPopup.classList.remove("hidden");
+          if (msg.type === "peer-joined") setStatus("Peer joined");
+          if (msg.type === "accepted") {
+            setStatus("Call accepted, setting up…");
+            startPeer(true);
+          }
+          if (msg.type === "rejected") {
+            setStatus("Call rejected");
+            cleanup();
+          }
+          if (msg.type === "offer") {
+            setStatus("Offer received…");
+            startPeer(false);
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: "answer", answer, room }));
+          }
+          if (msg.type === "answer") {
+            setStatus("Answer received, connecting…");
+            await pc.setRemoteDescription(
+              new RTCSessionDescription(msg.answer)
+            );
+          }
+          if (msg.type === "candidate")
+            try {
+              await pc.addIceCandidate(msg.candidate);
+            } catch {}
+          if (msg.type === "end") {
+            setStatus("Call ended");
+            endAndGoHome();
+          }
+        };
+      }
+
+      // Peer setup
+      async function startPeer(isInitiator) {
+        pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            {
+              urls: "turn:openrelay.metered.ca:80",
+              username: "openrelayproject",
+              credential: "openrelayproject",
+            },
+          ],
+        });
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: currentCam },
+          audio: true,
+        });
+        pipVideo.srcObject = localStream;
+        localStream
+          .getTracks()
+          .forEach((track) => pc.addTrack(track, localStream));
+        pc.ontrack = (e) => {
+          remoteStream = e.streams[0];
+          mainVideo.srcObject = remoteStream;
+        };
+        pc.onicecandidate = (e) =>
+          e.candidate &&
+          ws.send(
+            JSON.stringify({ type: "candidate", candidate: e.candidate, room })
+          );
+        if (isInitiator) {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          ws.send(JSON.stringify({ type: "offer", offer, room }));
         }
+      }
+
+      // Controls
+      btnMute.onclick = () => {
+        if (!localStream) return;
+        const t = localStream.getAudioTracks()[0];
+        t.enabled = !t.enabled;
+        btnMute.textContent = t.enabled ? "Mute" : "Unmute";
+      };
+      btnVideo.onclick = () => {
+        if (!localStream) return;
+        const t = localStream.getVideoTracks()[0];
+        t.enabled = !t.enabled;
+        btnVideo.textContent = t.enabled ? "Video Off" : "Video On";
+      };
+      btnSwitch.onclick = async () => {
+        currentCam = currentCam === "user" ? "environment" : "user";
+        localStream.getTracks().forEach((t) => t.stop());
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: currentCam },
+          audio: true,
+        });
+        pipVideo.srcObject = localStream;
+        localStream
+          .getTracks()
+          .forEach((track) => pc.addTrack(track, localStream));
       };
       btnEnd.onclick = () => {
         ws.send(JSON.stringify({ type: "end", room }));
-        cleanup();
+        endAndGoHome();
       };
 
-      function endCallUI() {
-        cleanup();
-        alert("Call ended");
-      }
+      // Cleanup + redirect
       function cleanup() {
         if (pc) {
           try {
@@ -448,16 +307,14 @@
         }
         if (localStream) {
           localStream.getTracks().forEach((t) => t.stop());
-          localStream = null;
         }
-        localVideo.srcObject = null;
-        remoteVideo.srcObject = null;
-        try {
-          ws.close();
-        } catch {}
+        mainVideo.srcObject = null;
+        pipVideo.srcObject = null;
       }
-
-      init();
+      function endAndGoHome() {
+        cleanup();
+        window.location.href = "/";
+      }
     </script>
   </body>
 </html>
