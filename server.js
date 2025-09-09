@@ -1,113 +1,55 @@
-// import express from 'express';
-// import http from 'http';
-// import { WebSocketServer } from 'ws';
-// import path from 'path';
-// import { fileURLToPath } from 'url';
-
-// const __filename = fileURLToPath(import.meta.url);
-// const __dirname = path.dirname(__filename);
-
-// const app = express();
-// const server = http.createServer(app);
-// const wss = new WebSocketServer({ server });
-
-// // Serve static front-end
-// app.use(express.static(path.join(__dirname, 'public')));
-
-// // Rooms map
-// const rooms = new Map();
-
-// wss.on('connection', (ws) => {
-//    ws.on('message', (msg) => {
-//       let data;
-//       try { data = JSON.parse(msg); } catch (e) { return; }
-//       const { type, room, payload } = data;
-
-//       if (type === 'join') {
-//          if (!rooms.has(room)) rooms.set(room, []);
-//          const arr = rooms.get(room);
-//          if (arr.length >= 2) { ws.send(JSON.stringify({ type: 'full' })); return; }
-//          arr.push(ws);
-//          ws.room = room;
-//          ws.role = arr.length === 1 ? 'initiator' : 'callee';
-//          ws.send(JSON.stringify({ type: 'joined', role: ws.role }));
-
-//          if (arr.length === 2) {
-//             const [a, b] = arr;
-//             try { b.send(JSON.stringify({ type: 'incoming' })); } catch (e) { }
-//             try { a.send(JSON.stringify({ type: 'peer-joined' })); } catch (e) { }
-//          }
-//       }
-
-//       if (type === 'accept') {
-//          const arr = rooms.get(room) || [];
-//          const initiator = arr.find(s => s.role === 'initiator');
-//          if (initiator) initiator.send(JSON.stringify({ type: 'callee-accepted' }));
-//       }
-
-//       if (['offer', 'answer', 'ice'].includes(type)) {
-//          const arr = rooms.get(room) || [];
-//          arr.forEach(client => { if (client !== ws) { try { client.send(JSON.stringify({ type, payload })); } catch { } } });
-//       }
-
-//       if (type === 'end') {
-//          const arr = rooms.get(room) || [];
-//          arr.forEach(client => { if (client !== ws) { try { client.send(JSON.stringify({ type: 'end' })); } catch { } } });
-//          rooms.delete(room);
-//       }
-//    });
-
-//    ws.on('close', () => {
-//       const room = ws.room;
-//       if (!room) return;
-//       const arr = rooms.get(room) || [];
-//       const remaining = arr.filter(s => s !== ws);
-//       if (remaining.length === 0) rooms.delete(room);
-//       else rooms.set(room, remaining);
-//       remaining.forEach(client => { try { client.send(JSON.stringify({ type: 'peer-left' })); } catch { } });
-//    });
-// });
-
-// const PORT = process.env.PORT || 8080;
-// server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-
-
-
-
-
 import http from "http";
 import express from "express";
 import { WebSocketServer } from "ws";
 
 const app = express();
-app.use(express.static("public"));
-
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const rooms = {};
+let rooms = {}; // roomId -> [sockets]
 
 wss.on("connection", (ws) => {
    ws.on("message", (msg) => {
       const data = JSON.parse(msg);
-      const { type, room } = data;
 
-      if (type === "join") {
-         if (!rooms[room]) rooms[room] = [];
-         rooms[room].push(ws);
-         ws.room = room;
+      if (data.type === "join") {
+         ws.room = data.room;
+         if (!rooms[data.room]) rooms[data.room] = [];
+         rooms[data.room].push(ws);
 
-         if (rooms[room].length === 1) {
+         const peers = rooms[data.room];
+         if (peers.length === 1) {
             ws.send(JSON.stringify({ type: "role", role: "caller" }));
-         } else if (rooms[room].length === 2) {
+         } else if (peers.length === 2) {
+            ws.send(JSON.stringify({ type: "role", role: "callee" }));
+            // notify caller that peer joined
+            peers[0].send(JSON.stringify({ type: "peer-joined" }));
+            // notify callee there's an incoming call
             ws.send(JSON.stringify({ type: "incoming" }));
-            rooms[room][0].send(JSON.stringify({ type: "peer-joined" }));
          }
       }
 
-      if (["offer", "answer", "candidate", "accept", "reject", "end"].includes(type)) {
-         rooms[room]?.forEach(client => {
-            if (client !== ws && client.readyState === ws.OPEN) {
+      if (data.type === "accept") {
+         const peers = rooms[data.room] || [];
+         const caller = peers[0];
+         if (caller) {
+            caller.send(JSON.stringify({ type: "accepted" })); // 👈 triggers offer creation
+         }
+      }
+
+      if (data.type === "reject") {
+         const peers = rooms[data.room] || [];
+         const caller = peers[0];
+         if (caller) {
+            caller.send(JSON.stringify({ type: "rejected" }));
+         }
+      }
+
+      // forward offers/answers/candidates/end to other peer
+      if (["offer", "answer", "candidate", "end"].includes(data.type)) {
+         const peers = rooms[data.room] || [];
+         peers.forEach((client) => {
+            if (client !== ws) {
                client.send(JSON.stringify(data));
             }
          });
@@ -116,10 +58,12 @@ wss.on("connection", (ws) => {
 
    ws.on("close", () => {
       if (ws.room && rooms[ws.room]) {
-         rooms[ws.room] = rooms[ws.room].filter(c => c !== ws);
+         rooms[ws.room] = rooms[ws.room].filter((c) => c !== ws);
+         if (rooms[ws.room].length === 0) delete rooms[ws.room];
       }
    });
 });
 
 const PORT = 8080;
-server.listen(8080, () => console.log("Server running on http://localhost:8080"));
+app.use(express.static("."));
+server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
